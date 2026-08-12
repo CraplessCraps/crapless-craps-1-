@@ -1,0 +1,16 @@
+# Auto-detect text files and perform LF normalization
+* text=auto
+
+# Explicitly declare binary files to prevent Git CRLF/LF line ending corruption
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.mp3 binary
+*.wav binary
+*.ogg binary
+*.jar binary
+*.aar binary
+*.zip binary

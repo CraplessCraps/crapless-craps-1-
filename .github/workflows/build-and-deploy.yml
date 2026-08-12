@@ -1,0 +1,279 @@
+name: Build Web App & Android Binaries (APK + AAB)
+
+on:
+  push:
+    branches: [ '**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-and-build"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install Project Dependencies
+        run: npm install
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Initialize & Sync Capacitor Android
+        run: |
+          npx cap add android || true
+          npx cap sync android
+          npm run build
+          npx cap copy android
+
+      - name: Clean Invalid Res Directories & Generate Fresh Binary PNG Assets
+        run: |
+          python3 -c "
+          import os, zlib, struct, math, shutil
+
+          def make_png_data(width, height, get_pixel_fn):
+              raw_data = bytearray()
+              for y in range(height):
+                  raw_data.append(0)
+                  for x in range(width):
+                      r, g, b, a = get_pixel_fn(x, y, width, height)
+                      raw_data.extend((r, g, b, a))
+                      
+              compressed = zlib.compress(bytes(raw_data), level=9)
+              
+              png = b'\x89PNG\r\n\x1a\n'
+              ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+              ihdr_crc = zlib.crc32(b'IHDR' + ihdr_data)
+              png += struct.pack('>I', len(ihdr_data)) + b'IHDR' + ihdr_data + struct.pack('>I', ihdr_crc)
+              
+              idat_crc = zlib.crc32(b'IDAT' + compressed)
+              png += struct.pack('>I', len(compressed)) + b'IDAT' + compressed + struct.pack('>I', idat_crc)
+              
+              iend_crc = zlib.crc32(b'IEND')
+              png += struct.pack('>I', 0) + b'IEND' + struct.pack('>I', iend_crc)
+              return png
+
+          def draw_dice_icon(x, y, w, h, mode='square'):
+              nx = x / float(w)
+              ny = y / float(h)
+              
+              if mode == 'round':
+                  dx = nx - 0.5
+                  dy = ny - 0.5
+                  if dx*dx + dy*dy > 0.235:
+                      return (0, 0, 0, 0)
+                      
+              if mode == 'foreground':
+                  bg = (0, 0, 0, 0)
+              else:
+                  dist = math.sqrt((nx-0.5)**2 + (ny-0.5)**2)
+                  v = max(0.0, 1.0 - dist*0.6)
+                  bg = (int(10 * v + 5), int(45 * v + 15), int(22 * v + 8), 255)
+                  
+              def in_dice(d_cx, d_cy, size, rot_deg):
+                  rad = math.radians(rot_deg)
+                  cos_a = math.cos(rad)
+                  sin_a = math.sin(rad)
+                  tx = nx - d_cx
+                  ty = ny - d_cy
+                  rx = tx * cos_a - ty * sin_a
+                  ry = tx * sin_a + ty * cos_a
+                  half = size / 2.0
+                  r_corner = size * 0.18
+                  if abs(rx) <= half and abs(ry) <= half:
+                      cx = abs(rx) - (half - r_corner)
+                      cy = abs(ry) - (half - r_corner)
+                      if cx > 0 and cy > 0:
+                          if cx*cx + cy*cy > r_corner*r_corner:
+                              return None
+                      return (rx, ry)
+                  return None
+
+              res1 = in_dice(0.38, 0.48, 0.38, -14)
+              if res1:
+                  rx, ry = res1
+                  dot_r = 0.036
+                  dots = [(0, 0), (-0.1, -0.1), (0.1, 0.1), (-0.1, 0.1), (0.1, -0.1)]
+                  for dx, dy in dots:
+                      if (rx - dx)**2 + (ry - dy)**2 <= dot_r**2:
+                          return (250, 250, 250, 255)
+                  return (220, 38, 38, 255)
+
+              res2 = in_dice(0.62, 0.52, 0.38, 16)
+              if res2:
+                  rx, ry = res2
+                  dot_r = 0.034
+                  dots = [(-0.095, -0.1), (-0.095, 0), (-0.095, 0.1), (0.095, -0.1), (0.095, 0), (0.095, 0.1)]
+                  for dx, dy in dots:
+                      if (rx - dx)**2 + (ry - dy)**2 <= dot_r**2:
+                          return (250, 250, 250, 255)
+                  return (185, 28, 28, 255)
+
+              return bg
+
+          def draw_splash(x, y, w, h):
+              nx = x / float(w)
+              ny = y / float(h)
+              dist = math.sqrt((nx-0.5)**2 + (ny-0.5)**2)
+              v = max(0.0, 1.0 - dist*0.7)
+              r = int(10 * v + 4)
+              g = int(42 * v + 12)
+              b = int(20 * v + 6)
+              margin_x = 8.0 / w
+              margin_y = 8.0 / h
+              if (abs(nx - 0.5) > 0.5 - margin_x and abs(ny - 0.5) <= 0.5 - margin_y) or \
+                 (abs(ny - 0.5) > 0.5 - margin_y and abs(nx - 0.5) <= 0.5 - margin_x):
+                  return (212, 175, 55, 255)
+              return (r, g, b, 255)
+
+          res_root = 'android/app/src/main/res'
+
+          # Delete non-standard res folders without drawable- or mipmap- prefix
+          for item in os.listdir(res_root):
+              item_path = os.path.join(res_root, item)
+              if os.path.isdir(item_path):
+                  if not (item.startswith('drawable') or item.startswith('mipmap') or item.startswith('values') or item.startswith('layout') or item.startswith('xml') or item.startswith('raw')):
+                      print('Removing invalid res folder:', item_path)
+                      shutil.rmtree(item_path, ignore_errors=True)
+
+          # Generate icons
+          icons = [
+              ('mipmap-mdpi', 48, 48, 108),
+              ('mipmap-hdpi', 72, 72, 162),
+              ('mipmap-xhdpi', 96, 96, 216),
+              ('mipmap-xxhdpi', 144, 144, 324),
+              ('mipmap-xxxhdpi', 192, 192, 432),
+          ]
+
+          for folder, s_size, r_size, fg_size in icons:
+              dir_path = os.path.join(res_root, folder)
+              os.makedirs(dir_path, exist_ok=True)
+              with open(os.path.join(dir_path, 'ic_launcher.png'), 'wb') as fp:
+                  fp.write(make_png_data(s_size, s_size, lambda x, y, w, h: draw_dice_icon(x, y, w, h, 'square')))
+              with open(os.path.join(dir_path, 'ic_launcher_round.png'), 'wb') as fp:
+                  fp.write(make_png_data(r_size, r_size, lambda x, y, w, h: draw_dice_icon(x, y, w, h, 'round')))
+              with open(os.path.join(dir_path, 'ic_launcher_foreground.png'), 'wb') as fp:
+                  fp.write(make_png_data(fg_size, fg_size, lambda x, y, w, h: draw_dice_icon(x, y, w, h, 'foreground')))
+
+          # Generate splashes
+          splashes = [
+              ('drawable', 480, 320),
+              ('drawable-land-mdpi', 480, 320),
+              ('drawable-land-hdpi', 800, 480),
+              ('drawable-land-xhdpi', 1280, 720),
+              ('drawable-land-xxhdpi', 1600, 960),
+              ('drawable-land-xxxhdpi', 1920, 1080),
+              ('drawable-port-mdpi', 320, 480),
+              ('drawable-port-hdpi', 480, 800),
+              ('drawable-port-xhdpi', 720, 1280),
+              ('drawable-port-xxhdpi', 960, 1600),
+              ('drawable-port-xxxhdpi', 1280, 1920),
+          ]
+
+          for folder, sw, sh in splashes:
+              dir_path = os.path.join(res_root, folder)
+              os.makedirs(dir_path, exist_ok=True)
+              with open(os.path.join(dir_path, 'splash.png'), 'wb') as fp:
+                  fp.write(make_png_data(sw, sh, draw_splash))
+
+          print('All PNG resources verified & generated cleanly!')
+          "
+
+      - name: Configure AndroidManifest Settings
+        run: |
+          python3 -c "
+          import os
+          path = 'android/app/src/main/AndroidManifest.xml'
+          if os.path.exists(path):
+              with open(path, 'r') as f:
+                  content = f.read()
+              if 'android:screenOrientation' not in content:
+                  content = content.replace('<activity', '<activity android:screenOrientation=\"portrait\"')
+              if 'com.google.android.gms.ads.APPLICATION_ID' not in content:
+                  meta = '        <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"ca-app-pub-5261446822008111~7681439610\" />\n'
+                  content = content.replace('<activity', meta + '        <activity')
+              with open(path, 'w') as f:
+                  f.write(content)
+              print('AndroidManifest.xml verified')
+          "
+
+      - name: Fix Uppercase Android Resource Filenames
+        run: |
+          python3 -c "
+          import os, re
+          for root, dirs, files in os.walk('android'):
+              if 'res' in root.split(os.sep):
+                  for f in files:
+                      path = os.path.join(root, f)
+                      name, ext = os.path.splitext(f)
+                      clean_name = re.sub(r'[^a-z0-9_]', '_', name.lower())
+                      clean_ext = ext.lower()
+                      clean_f = clean_name + clean_ext
+                      if f != clean_f:
+                          target = os.path.join(root, clean_f)
+                          print(f'Fixing resource filename: {path} -> {target}')
+                          if os.path.exists(target) and os.path.abspath(path) != os.path.abspath(target):
+                              os.remove(path)
+                          else:
+                              os.rename(path, target)
+          "
+
+      - name: Setup Clean Gradle Wrapper
+        run: |
+          cd android
+          mkdir -p /tmp/gwrap && cd /tmp/gwrap
+          touch settings.gradle
+          gradle wrapper --gradle-version 8.11.1
+          cp gradle/wrapper/gradle-wrapper.jar ${{ github.workspace }}/android/gradle/wrapper/
+          cp gradle/wrapper/gradle-wrapper.properties ${{ github.workspace }}/android/gradle/wrapper/
+
+      - name: Build Android APK (Debug & Release) & AAB (Release Bundle)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug assembleRelease bundleRelease --stacktrace
+
+      - name: Upload Android Binaries (APK & AAB) as Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Binaries
+          path: |
+            android/app/build/outputs/apk/**/*.apk
+            android/app/build/outputs/bundle/**/*.aab
+          retention-days: 14
+
+      - name: Deploy Web App to GitHub Pages (gh-pages branch)
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+
+      - name: Upload Web Build Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+      - name: Deploy Web App to GitHub Pages (Actions Deployment)
+        id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4

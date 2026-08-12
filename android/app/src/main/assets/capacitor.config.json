@@ -1,0 +1,11 @@
+{
+	"appId": "com.craplesscraps.app",
+	"appName": "Crapless Craps",
+	"webDir": "dist",
+	"bundledWebRuntime": false,
+	"plugins": {
+		"AdMob": {
+			"appId": "ca-app-pub-6597311189645426~7681439610"
+		}
+	}
+}

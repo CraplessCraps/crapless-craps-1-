@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: max(0px, env(safe-area-inset-bottom));
+  }
+}
+

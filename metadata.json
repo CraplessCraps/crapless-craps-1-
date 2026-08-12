@@ -1,0 +1,6 @@
+{
+  "name": "Crapless Craps",
+  "description": "Authentic casino Crapless Craps simulator featuring ATS Bonus, Pass Line & Odds, Come Bets, Place Bets, Press options, and detailed roll analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
