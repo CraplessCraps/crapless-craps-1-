@@ -23,7 +23,7 @@ android {
                 storePassword 'CraplessCraps2026!'
                 keyAlias 'release'
                 keyPassword 'CraplessCraps2026!'
-                storeType 'pkcs12'
+                storeType 'jks'
             } else {
                 storeFile file('debug.keystore')
                 storePassword 'android'
